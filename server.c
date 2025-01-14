@@ -19,65 +19,57 @@ pthread_mutex_t global_lock;
 // While vip_is_busy = 1, no regular thread is allowed to start a request.
 static int vip_is_busy = 0;
 
-// ---------------------------
+// --------------------------------------------------
 // VIP Thread Function
-// ---------------------------
+// --------------------------------------------------
 void *VIPThreadFunction(void *args)
 {
-    // We receive a pointer to stable memory in threadArr[num].
     threadStats *threadStruct = (threadStats *)args;
 
     while (1) {
         pthread_mutex_lock(&global_lock);
 
-        // If no VIP requests, wait
+        // Wait if no VIP requests
         while (getSize(vip_requests) == 0) {
             pthread_cond_wait(&vip_allowed, &global_lock);
         }
-
-        // Mark VIP as busy before dequeueing the VIP request
         vip_is_busy = 1;
 
-        // Dequeue the next VIP request
+        // Take next VIP request
         Node toWorkWith = removeFront(vip_requests);
         append(running_requests, toWorkWith, threadStruct->id);
 
         pthread_mutex_unlock(&global_lock);
 
-        // ---- Handle the VIP request ----
+        // Handle request
         requestHandle(getValue(toWorkWith), toWorkWith, threadStruct);
         Close(getValue(toWorkWith));
-        // --------------------------------
 
-        // Cleanup after finishing the request
+        // Cleanup
         pthread_mutex_lock(&global_lock);
-
         removeByValue(running_requests, getValue(toWorkWith));
-        // Mark VIP no longer busy
         vip_is_busy = 0;
 
-        // Signal that a slot freed up
+        // Freed a slot
         pthread_cond_broadcast(&write_allowed);
 
-        // If queues are all empty, signal empty_queue
-        if ((getSize(running_requests) == 0) &&
-            (getSize(waiting_requests) == 0) &&
-            (getSize(vip_requests) == 0)) {
+        // If all empty, signal empty_queue
+        if ( (getSize(running_requests) == 0) &&
+             (getSize(waiting_requests) == 0) &&
+             (getSize(vip_requests) == 0) ) {
             pthread_cond_signal(&empty_queue);
         }
-
-        // Wake up regular threads, in case they’re blocked by vip_is_busy
+        // Wake regular threads
         pthread_cond_broadcast(&read_allowed);
 
         pthread_mutex_unlock(&global_lock);
     }
-
     return NULL;
 }
 
-// ---------------------------
+// --------------------------------------------------
 // Regular Thread Function
-// ---------------------------
+// --------------------------------------------------
 void *ThreadFunction(void *args)
 {
     threadStats *threadStruct = (threadStats *)args;
@@ -85,55 +77,51 @@ void *ThreadFunction(void *args)
     while (1) {
         pthread_mutex_lock(&global_lock);
 
-        // Block if:
-        //  1) No regular requests available, OR
-        //  2) VIP queue has requests, OR
-        //  3) VIP is currently busy
-        while ((getSize(waiting_requests) == 0) ||
-               (getSize(vip_requests) > 0)      ||
-               (vip_is_busy == 1)) {
+        // Wait if:
+        // 1) No regular requests
+        // 2) VIP queue non-empty
+        // 3) VIP busy
+        while ( (getSize(waiting_requests) == 0) ||
+                (getSize(vip_requests) > 0) ||
+                (vip_is_busy == 1) )
+        {
             if (getSize(vip_requests) > 0) {
-                // If VIP queue is non-empty, wait on vip_allowed
                 pthread_cond_wait(&vip_allowed, &global_lock);
             } else {
-                // Otherwise, just wait on read_allowed
                 pthread_cond_wait(&read_allowed, &global_lock);
             }
         }
 
-        // Dequeue the oldest regular request
+        // Dequeue oldest regular request
         Node toWorkWith = removeFront(waiting_requests);
         append(running_requests, toWorkWith, threadStruct->id);
 
         pthread_mutex_unlock(&global_lock);
 
-        // ---- Handle the regular request ----
+        // Handle request
         requestHandle(getValue(toWorkWith), toWorkWith, threadStruct);
         Close(getValue(toWorkWith));
-        // ------------------------------------
 
+        // Cleanup
         pthread_mutex_lock(&global_lock);
-
         removeByValue(running_requests, getValue(toWorkWith));
         pthread_cond_signal(&write_allowed);
 
-        // If everything is empty, signal empty_queue
-        if ((getSize(running_requests) == 0) &&
-            (getSize(waiting_requests) == 0) &&
-            (getSize(vip_requests) == 0)) {
+        if ( (getSize(running_requests) == 0) &&
+             (getSize(waiting_requests) == 0) &&
+             (getSize(vip_requests) == 0) )
+        {
             pthread_cond_signal(&empty_queue);
         }
-
         pthread_mutex_unlock(&global_lock);
     }
-
     return NULL;
 }
 
 // --------------------------------------------------
-// Parse command-line arguments (with scheduling alg)
+// Parse command-line arguments
 // --------------------------------------------------
-void getArguments(int *port, int *threadsNum, int *poolSize, 
+void getArguments(int *port, int *threadsNum, int *poolSize,
                   char *schedAlg, int argc, char *argv[])
 {
     if (argc != 5) {
@@ -143,33 +131,32 @@ void getArguments(int *port, int *threadsNum, int *poolSize,
     *port = atoi(argv[1]);
     *threadsNum = atoi(argv[2]);
     if (*threadsNum <= 0) {
-        fprintf(stderr, "Error: Number of threads must be positive.\n");
+        fprintf(stderr, "Error: #threads must be positive.\n");
         exit(1);
     }
     *poolSize = atoi(argv[3]);
     if (*poolSize <= 0) {
-        fprintf(stderr, "Error: Queue size must be positive.\n");
+        fprintf(stderr, "Error: queue size must be positive.\n");
         exit(1);
     }
 
     strcpy(schedAlg, argv[4]);
-    // Basic check for known sched alg
     if (strcmp(schedAlg, "block") != 0 &&
         strcmp(schedAlg, "dt")    != 0 &&
         strcmp(schedAlg, "dh")    != 0 &&
         strcmp(schedAlg, "bf")    != 0 &&
-        strcmp(schedAlg, "random")!= 0) {
+        strcmp(schedAlg, "random")!= 0)
+    {
         fprintf(stderr, "Error: Unknown scheduling algorithm: %s\n", schedAlg);
         exit(1);
     }
 }
 
 // --------------------------------------------------
-// Initialize threads: <num> regular + 1 VIP thread
+// Initialize threads: <num> regular + 1 VIP
 // --------------------------------------------------
 void initializeThreads(int num, threadStats *threadsArr, pthread_t *vipThread)
 {
-    // Create regular threads [0..num-1]
     for (int i = 0; i < num; i++) {
         threadsArr[i].id        = i;
         threadsArr[i].dynm_req  = 0;
@@ -180,8 +167,7 @@ void initializeThreads(int num, threadStats *threadsArr, pthread_t *vipThread)
                        ThreadFunction, (void *)&threadsArr[i]);
     }
 
-    // Create VIP thread in index [num]
-    // so we have stable memory for the VIP stats
+    // VIP in [num]
     threadsArr[num].id        = num;
     threadsArr[num].dynm_req  = 0;
     threadsArr[num].stat_req  = 0;
@@ -202,108 +188,97 @@ int main(int argc, char *argv[])
 
     getArguments(&port, &threadNum, &poolSize, schedAlg, argc, argv);
 
-    // Initialize queues
+    // init queues
     vip_requests     = queueConstructor();
     running_requests = queueConstructor();
     waiting_requests = queueConstructor();
 
-    // Initialize synchronization primitives
+    // init sync
     pthread_cond_init(&empty_queue, NULL);
     pthread_cond_init(&vip_allowed, NULL);
     pthread_cond_init(&read_allowed, NULL);
     pthread_cond_init(&write_allowed, NULL);
     pthread_mutex_init(&global_lock, NULL);
 
-    // We'll allocate for threadNum+1 so there's space for the VIP stats
-    threadStats *threadArr = (threadStats *)malloc(sizeof(threadStats) * (threadNum + 1));
+    // thread array
+    threadStats *threadArr = (threadStats *)malloc(sizeof(threadStats)*(threadNum+1));
     pthread_t vipThread;
 
-    // Initialize threads (regular + VIP)
+    // create threads
     initializeThreads(threadNum, threadArr, &vipThread);
 
-    // Start listening
     listenfd = Open_listenfd(port);
-    srand(time(NULL)); // for 'random' dropping if needed
+    srand(time(NULL)); // for random dropping
 
     while (1) {
         clientlen = sizeof(clientaddr);
         connfd = Accept(listenfd, (SA *)&clientaddr, (socklen_t *)&clientlen);
 
-        // Grab arrival time
+        // arrival time
         struct timeval arrival_time;
         gettimeofday(&arrival_time, NULL);
 
         pthread_mutex_lock(&global_lock);
 
-        // If getRequestMetaData(...) == 1 => VIP request, else regular
         int isVIP = getRequestMetaData(connfd);
-
         if (isVIP) {
-            // VIP request
-            // If total usage is at capacity, we block (per requirement).
-            while ((getSize(running_requests) + 
-                    getSize(waiting_requests) +
-                    getSize(vip_requests)) >= poolSize)
+            // VIP
+            while ( (getSize(running_requests) +
+                     getSize(waiting_requests) +
+                     getSize(vip_requests)) >= poolSize )
             {
                 pthread_cond_wait(&write_allowed, &global_lock);
             }
-
             appendNewRequest(vip_requests, connfd, arrival_time);
-            // Signal VIP thread that a VIP request is available
             pthread_cond_signal(&vip_allowed);
-
         } else {
-            // Regular request
-            // Check if we are at capacity
-            if ((getSize(running_requests) + getSize(waiting_requests)) == poolSize) {
-                // Overload: apply scheduling policy
+            // Regular
+            if ( (getSize(running_requests) + getSize(waiting_requests)) == poolSize ) {
+                // Overloaded => apply schedAlg
                 if (strcmp(schedAlg, "block") == 0) {
-                    while ((getSize(running_requests) + 
-                            getSize(waiting_requests)) == poolSize)
-                    {
+                    while ((getSize(running_requests) + getSize(waiting_requests)) == poolSize) {
                         pthread_cond_wait(&write_allowed, &global_lock);
                     }
                 }
                 else if (strcmp(schedAlg, "dt") == 0) {
-                    // Drop tail: close new request immediately
+                    // drop tail => close new
                     Close(connfd);
                     pthread_mutex_unlock(&global_lock);
                     continue;
                 }
                 else if (strcmp(schedAlg, "dh") == 0) {
-                    // Drop head: remove the oldest from waiting
+                    // drop head => remove oldest from waiting
                     if (getSize(waiting_requests) > 0) {
                         Node oldest = removeFront(waiting_requests);
                         Close(getValue(oldest));
                     } else {
-                        // If waiting queue empty, just close new
                         Close(connfd);
                         pthread_mutex_unlock(&global_lock);
                         continue;
                     }
                 }
                 else if (strcmp(schedAlg, "bf") == 0) {
-                    // block_flush: wait until all are done, then drop new
-                    while ((getSize(running_requests) > 0) ||
-                           (getSize(waiting_requests) > 0))
+                    // block_flush => wait all done, then drop new
+                    while ( (getSize(running_requests) > 0) ||
+                            (getSize(waiting_requests) > 0) )
                     {
                         pthread_cond_wait(&empty_queue, &global_lock);
                     }
-                    // After flush, drop new
                     Close(connfd);
                     pthread_mutex_unlock(&global_lock);
                     continue;
                 }
                 else if (strcmp(schedAlg, "random") == 0) {
-                    // Drop random 50% of waiting
+                    // Drop ~50% of waiting requests at random
                     int wsize = getSize(waiting_requests);
                     if (wsize == 0) {
-                        // No waiting to drop, just close new
+                        // no waiting => close new
                         Close(connfd);
                         pthread_mutex_unlock(&global_lock);
                         continue;
                     }
-                    int toDrop = wsize / 2; // 50%
+                    // half => round up
+                    int toDrop = (wsize + 1)/2;
                     for (int i = 0; i < toDrop; i++) {
                         int idx = rand() % getSize(waiting_requests);
                         int oldFd = removeByIndex(waiting_requests, idx);
@@ -313,20 +288,13 @@ int main(int argc, char *argv[])
                         }
                     }
                 }
-                // Possibly space is freed, so we can proceed
             }
-
-            // Enqueue the new regular request
+            // now we can accept the new request
             appendNewRequest(waiting_requests, connfd, arrival_time);
-            // Signal regular threads
             pthread_cond_signal(&read_allowed);
         }
 
         pthread_mutex_unlock(&global_lock);
     }
-
-    // (In practice, you'd free memory and join threads on shutdown.)
-    // free(threadArr);
-
     return 0;
 }
