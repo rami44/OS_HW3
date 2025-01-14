@@ -20,4 +20,3 @@ void requestHandle(int fd, Node node, threadStats *t_stats);
 Node skip_request(threadStats* thread);
 
 #endif
-
